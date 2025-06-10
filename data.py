@@ -181,3 +181,49 @@ def _aggregate_player_data(match_request):
     # return dataframe of all players with their statistics
     return pd.concat(list_of_dfs, axis=0, ignore_index=True).fillna(0)
     
+
+    # DataFrame should be of only one match
+def check_bq_duplicates(dataframe: pd.DataFrame,
+                        schema: str,
+                        project_name: str = 'prizepicksanalytics',
+                        table_name: str = f'soccer_simulations.schema_match_data'):
+    
+    assert dataframe.shape[0] != 0, "Empty dataframes not accepted"
+    assert schema in ['team', 'player'], "Only team and player data accepted"
+    table_name = table_name.replace('schema', schema)
+
+    match_ids = list(dataframe.match_id.unique())
+
+    column_key = 'team_id' if schema == 'team' else 'playerId'
+
+    query = f"""
+        select match_id, {column_key}
+        from {project_name}.{table_name}
+        where match_id in ({", ".join(["'" + x + "'" for x in match_ids])}) 
+    """
+
+    rows_on_bq = execute_bq_query(query)
+
+    if rows_on_bq.shape[0] == dataframe.shape[0]:
+        print("Data already loaded onto BQ!")
+        return
+    else:
+        dataframe = dataframe.merge(rows_on_bq,
+                                    on=['match_id', column_key],
+                                    how='left',
+                                    indicator=True)
+        
+        dataframe = dataframe[dataframe['_merge'] == 'left_only'].drop(columns=['_merge'])
+        
+
+    return dataframe
+
+
+
+def execute_bq_query(query: str) -> pd.DataFrame:
+    bigquery_client = bqc.Client(project='prizepicksanalytics')
+    query_results = bigquery_client.query(query)
+    data = query_results.to_dataframe()
+    bigquery_client.close()
+
+    return data
