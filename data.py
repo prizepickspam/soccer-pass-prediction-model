@@ -72,7 +72,6 @@ def process_game_data(match_id):
     return team_data, player_data
 
 
-
 # method to aggregate team data
 
 def _aggregate_team_data(match_stats):
@@ -99,6 +98,13 @@ def _aggregate_team_data(match_stats):
         # transpose statistics to make ts dataframe (team statistics)
         ts = team_stats[['type', 'value']].set_index('type').T
 
+        stat_cols = ts.columns
+        missing_cols = set(config.all_team_match_stats).difference(stat_cols)
+
+        if missing_cols:
+            missing_df = pd.DataFrame(0, index=ts.index, columns=list(missing_cols), dtype=float)
+            ts = pd.concat([ts, missing_df], axis=1)
+
         # create dataframe for cs (config statistics)
         cs = pd.DataFrame({
             'competition_id': [competition_id],
@@ -112,7 +118,7 @@ def _aggregate_team_data(match_stats):
             'home' : True if competitor['position'] == 'home' else False,
         })
 
-        team_row = pd.concat([cs.reset_index(drop=True), ts.reset_index(drop=True)], axis=1)
+        team_row = pd.concat([cs.reset_index(drop=True), ts[config.all_team_match_stats].reset_index(drop=True)], axis=1)
         team_row['formationUsed'] = str(team.formationUsed)
 
         match_list.append(team_row)
@@ -135,7 +141,7 @@ def _aggregate_player_data(match_request):
 
         # replace substitution position with boolean column
         players['isSub'] = players.position.apply(lambda x: True if x == 'Substitute' else False)
-        cols_to_keep = ['playerId', 'matchName', 'position', 'positionSide', 'formationPlace', 'isSub']
+        cols_to_keep = ['playerId', 'matchName', 'position', 'positionSide', 'isSub']
 
         # turn statistics json into pandas dataframe + make all numbers into floats
         stats = players.stat.apply(lambda lisa: {x['type']:float(x['value']) for x in lisa})

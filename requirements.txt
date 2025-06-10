@@ -3,3 +3,4 @@ numpy
 tqdm
 google-cloud-bigquery
 db-dtypes
+pandas-gbq
