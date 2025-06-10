@@ -1,0 +1,5 @@
+pandas
+numpy
+tqdm
+google-cloud-bigquery
+db-dtypes
