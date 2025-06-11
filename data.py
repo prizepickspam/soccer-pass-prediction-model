@@ -57,6 +57,75 @@ def _get_all_matches_in_tourneycal(tourney_cal_id: str):
     return pd.DataFrame([x['matchInfo'] for x in all_matches['match']])
 
 
+def get_statsperform_tourneys(to_bq=False):
+    # Get all available tournament calendar IDs with OT2 feed
+    feed = 'tournamentcalendar'
+    comps = _access_statsperform_api(feed)
+    competitions = pd.DataFrame(comps['competition'])
+    competitions = competitions.explode('tournamentCalendar')
+
+    extended_tourneys = pd.json_normalize(competitions['tournamentCalendar'])
+    extended_tourneys.columns = ['tourneyCalId', 'includesVenues', 'tcOcId', 'tcName', 'startDate', 'endDate', 'active', 'lastUpdated', 'includesStandings']
+
+    final_df = pd.concat([competitions.drop(columns=['tournamentCalendar']).reset_index(drop=True),
+                      extended_tourneys.reset_index(drop=True)], axis=1)
+                                
+    if to_bq:
+        try:
+            final_df.to_gbq('soccer_simulations.tourneycal_data',
+                    'prizepicksanalytics',
+                    if_exists='fail')
+        except Exception as e:
+            print("Table already exists on BQ!")
+
+    return extended_tourneys
+
+
+# getting access to player data using MA2 feed
+def backload_season_data(tourney_cal_id, 
+                         game_limit=None,
+                         project_name: str = 'prizepicksanalytics',
+                        table_name: str = f'soccer_simulations.schema_match_data'):
+    
+    matches = _get_all_matches_in_tourneycal(tourney_cal_id)
+
+    processed_match_ids = list(get_processed_match_ids().match_id)
+    list_of_matches = [x for x in matches.id.unique() if x not in processed_match_ids]
+
+    if game_limit:
+        list_of_matches = list_of_matches[:game_limit]
+
+    all_teams = []
+    all_players = []
+
+    for i, id in enumerate(list_of_matches):
+
+        if id in processed_match_ids:
+            continue
+
+        print(f"Now processing match #{i}: {id}")
+        team, player = process_game_data(id)
+
+        all_players.append(player)
+        all_teams.append(team)
+        
+
+    if all_teams and all_players:
+        team_data_to_bq = pd.concat(all_teams, axis=0, ignore_index=True)
+        team_data_to_bq.to_gbq(table_name.replace('schema', 'team'),
+                project_name,
+                if_exists='append')
+        
+        player_data_to_bq = pd.concat(all_players, axis=0, ignore_index=True)
+        player_data_to_bq.to_gbq(table_name.replace('schema', 'player'),
+                project_name,
+                if_exists='append')
+        
+        print(f"Team and Player Data Uploaded for the following Game Ids: {team_data_to_bq.match_id.unique()}")
+        return team, player
+    else:
+        return None, None
+
 
 # calls statsperform api to get stats of one game then calculates team and player data.
 def process_game_data(match_id):
@@ -182,7 +251,16 @@ def _aggregate_player_data(match_request):
     return pd.concat(list_of_dfs, axis=0, ignore_index=True).fillna(0)
     
 
-    # DataFrame should be of only one match
+def get_processed_match_ids():
+    query = """
+        select distinct match_id
+        from prizepicksanalytics.soccer_simulations.team_match_data
+    """
+
+    return execute_bq_query(query)
+
+
+# DEPRECATED!: DataFrame should be of only one match
 def check_bq_duplicates(dataframe: pd.DataFrame,
                         schema: str,
                         project_name: str = 'prizepicksanalytics',
