@@ -48,15 +48,6 @@ def _access_statsperform_api(feed_name: str,
 
 
 
-# Get all matches of a tourneycal (one season of one competition) with MA1 feed
-def _get_all_matches_in_tourneycal(tourney_cal_id: str):
-
-    all_matches = _access_statsperform_api(feed_name='match',
-                         tourney_cal_id=tourney_cal_id)
-
-    return pd.DataFrame([x['matchInfo'] for x in all_matches['match']])
-
-
 def get_statsperform_tourneys(to_bq=False):
     # Get all available tournament calendar IDs with OT2 feed
     feed = 'tournamentcalendar'
@@ -78,19 +69,44 @@ def get_statsperform_tourneys(to_bq=False):
         except Exception as e:
             print("Table already exists on BQ!")
 
-    return extended_tourneys
+    return final_df
+
+
+# Get all matches of a tourneycal (one season of one competition) with MA1 feed
+def _get_all_matches_in_tourneycal(tourney_cal_id: str):
+
+    all_matches = _access_statsperform_api(feed_name='match',
+                         tourney_cal_id=tourney_cal_id)
+
+    return pd.DataFrame([x['matchInfo'] for x in all_matches['match']])
+
 
 
 # getting access to player data using MA2 feed
-def backload_season_data(tourney_cal_id, 
+def backload_season_data(tourney_cal_id: str, 
                          game_limit=None,
                          project_name: str = 'prizepicksanalytics',
                         table_name: str = f'soccer_simulations.schema_match_data'):
     
     matches = _get_all_matches_in_tourneycal(tourney_cal_id)
+    processed_team_match_ids = []
+    processed_player_match_ids = []
 
-    processed_match_ids = list(get_processed_match_ids().match_id)
-    list_of_matches = [x for x in matches.id.unique() if x not in processed_match_ids]
+    try:
+        processed_team_match_ids = get_processed_team_match_ids()
+        processed_team_match_ids = list(processed_team_match_ids.match_id.unique())
+    except Exception as e:
+        print('team table doesnt exist')
+
+    try:
+        processed_player_match_ids = get_processed_player_match_ids()
+        processed_player_match_ids = list(processed_player_match_ids.match_id.unique())
+    except Exception as e:
+        print('player table doesnt exist')
+
+    list_of_matches = matches.id.unique()
+    processed_matches = list(set(processed_team_match_ids) & set(processed_player_match_ids))
+    list_of_matches = [x for x in list_of_matches if x not in processed_matches]
 
     if game_limit:
         list_of_matches = list_of_matches[:game_limit]
@@ -100,45 +116,58 @@ def backload_season_data(tourney_cal_id,
 
     for i, id in enumerate(list_of_matches):
 
-        if id in processed_match_ids:
+        if id in processed_team_match_ids and id in processed_player_match_ids:
             continue
 
-        print(f"Now processing match #{i}: {id}")
-        team, player = process_game_data(id)
+        game_stats = None
 
-        all_players.append(player)
-        all_teams.append(team)
+        if id not in processed_team_match_ids:
+
+            print(f"Now processing team match stats #{i}: {id}")
+            game_stats = get_game_stats(id)
+            team_stats = _aggregate_team_data(game_stats)
+            all_teams.append(team_stats)
+            
+        if id not in processed_player_match_ids:
+            if game_stats == None:
+                game_stats = get_game_stats(id)
+
+            print(f"Now processing player match stats #{i}: {id}")
+            player_stats = _aggregate_player_data(game_stats)
+            all_players.append(player_stats)
         
 
-    if all_teams and all_players:
+
+    if all_teams :
         team_data_to_bq = pd.concat(all_teams, axis=0, ignore_index=True)
         team_data_to_bq.to_gbq(table_name.replace('schema', 'team'),
                 project_name,
                 if_exists='append')
         
+    if all_players:
         player_data_to_bq = pd.concat(all_players, axis=0, ignore_index=True)
         player_data_to_bq.to_gbq(table_name.replace('schema', 'player'),
                 project_name,
                 if_exists='append')
         
-        print(f"Team and Player Data Uploaded for the following Game Ids: {team_data_to_bq.match_id.unique()}")
-        return team, player
-    else:
-        return None, None
+    print(f"Data Uploaded for the following Game Ids: {list_of_matches}")
+    #     return team, player
+    # else:
+    #     return None, None
 
 
 # calls statsperform api to get stats of one game then calculates team and player data.
-def process_game_data(match_id):
+def get_game_stats(match_id):
     
     match_data = _access_statsperform_api(feed_name='matchstats',
                          match_id=match_id)
     
-    # TODO: enable checking of big query tables to avoid repeat loading of certain games
-    team_data = _aggregate_team_data(match_data)
+    # # TODO: enable checking of big query tables to avoid repeat loading of certain games
+    # team_data = _aggregate_team_data(match_data)
 
-    player_data = _aggregate_player_data(match_data)
+    # player_data = _aggregate_player_data(match_data)
     
-    return team_data, player_data
+    return match_data
 
 
 # method to aggregate team data
@@ -203,9 +232,14 @@ def _aggregate_player_data(match_request):
 
     subs = pd.DataFrame(match_request['liveData']['substitute']).set_index('playerOnId').to_dict('index')
 
+    competitors = match_request['matchInfo']['contestant']
+
     list_of_dfs = []
 
     for _, team in match_data.iterrows():
+        competitor = competitors[0] if competitors[0]['id'] == team.contestantId else competitors[1]
+        home = True if competitor['position'] == 'home' else False
+
         players = pd.DataFrame(team['player'])
 
         # replace substitution position with boolean column
@@ -233,8 +267,10 @@ def _aggregate_player_data(match_request):
 
         # add config columns
         players.insert(0, 'match_id', match_request['matchInfo']['id'])
-        players.insert(1, 'team_id', team.contestantId)
-        config_cols = ['match_id', 'team_id'] + cols_to_keep
+        players.insert(1, 'match_date', match_request['matchInfo']['date'])
+        players.insert(2, 'team_id', team.contestantId)
+        players.insert(3, 'home', home)
+        config_cols = ['match_id', 'match_date', 'team_id', 'home'] + cols_to_keep
 
         # add all columns not found in player data to keep StatsPerform detailed player statistics schema 
         # (schema can be found in config.py)
@@ -251,13 +287,23 @@ def _aggregate_player_data(match_request):
     return pd.concat(list_of_dfs, axis=0, ignore_index=True).fillna(0)
     
 
-def get_processed_match_ids():
-    query = """
+def get_processed_team_match_ids():
+    team_query = """
         select distinct match_id
         from prizepicksanalytics.soccer_simulations.team_match_data
     """
 
-    return execute_bq_query(query)
+    return execute_bq_query(team_query)    
+
+
+def get_processed_player_match_ids():
+    player_query = """
+        select distinct match_id
+        from prizepicksanalytics.soccer_simulations.player_match_data
+    """
+
+    return execute_bq_query(player_query)
+
 
 
 # DEPRECATED!: DataFrame should be of only one match
