@@ -60,8 +60,8 @@ class DataLoader:
 
 
 
-    def get_statsperform_tourneys(self,
-                                  to_bq=False):
+    def load_competitions(self,
+                        to_bq=True):
         # Get all available tournament calendar IDs with OT2 feed
         feed = 'tournamentcalendar'
         comps = self._access_statsperform_api(feed)
@@ -84,8 +84,8 @@ class DataLoader:
 
         return final_df
 
-    def get_squads(self,
-                to_bq=False):
+    def load_squads(self,
+                to_bq=True):
         squads = self._access_statsperform_api('squads')
 
         squads = pd.DataFrame(squads['squad'])
@@ -231,8 +231,9 @@ class DataLoader:
             # turn statistics into numerics and get team object from competitor
             team_stats = pd.DataFrame(team.stat)
             team_stats['value'] = pd.to_numeric(team_stats.value)
-            competitor = competitors[0] if competitors[0]['id'] == team.contestantId else competitors[1]
 
+            competitor = competitors[0] if competitors[0]['id'] == team.contestantId else competitors[1]
+            opponent = competitors[0] if competitors[0]['id'] != team.contestantId else competitors[1]
             # transpose statistics to make ts dataframe (team statistics)
             ts = team_stats[['type', 'value']].set_index('type').T
 
@@ -253,6 +254,7 @@ class DataLoader:
                 'match_date': match_stats['matchInfo']['date'],
                 'team_id' : [str(competitor['id'])],
                 'team_name': [str(competitor['shortName'])],
+                'opponent_id': [str(opponent['id'])],
                 'home' : True if competitor['position'] == 'home' else False,
             })
 
