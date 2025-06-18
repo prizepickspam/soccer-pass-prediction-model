@@ -8,15 +8,17 @@ from google.cloud import bigquery as bqc
 class DataLoader:
     def __init__(self, 
                  tourney_cal_id: str,
+                 load_calendar: bool = True,
                  bq_project: str = 'prizepicksanalytics'):
         
         self.tourney_cal_id = tourney_cal_id
         self.bq_project = bq_project
 
         self.matches = None
-        self._get_all_matches_in_tourneycal()
-
         self.client = bqc.Client(project=self.bq_project)
+        self._get_all_matches_in_tourneycal(load_calendar)
+
+        
 
     def _access_statsperform_api(self,
                                 feed_name: str,
@@ -108,7 +110,8 @@ class DataLoader:
 
 
     # Get all matches of a tourneycal (one season of one competition) with MA1 feed
-    def _get_all_matches_in_tourneycal(self):
+    def _get_all_matches_in_tourneycal(self,
+                                       load_calendar):
 
         all_matches = self._access_statsperform_api(feed_name='match')
 
@@ -120,6 +123,15 @@ class DataLoader:
         df['tourneycal_name'] = df.apply(lambda x: x['competition']['name'] + ' ' + x['tournamentCalendar']['name'], axis=1)
         df = df.drop(columns=['venue', 'sport', 'ruleset', 'competition', 'tournamentCalendar', 'stage', 'contestant'])
         self.matches = df
+
+        if load_calendar:
+            try:
+                self.matches.to_gbq('soccer_simulations.match_calendar',
+                        self.bq_project,
+                        if_exists='fail')
+            except Exception as e:
+                print("Table already exists on BQ!")
+
 
 
 
