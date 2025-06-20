@@ -63,7 +63,7 @@ class DataLoader:
 
 
     def load_competitions(self,
-                        to_bq=True):
+                        to_bq=False):
         # Get all available tournament calendar IDs with OT2 feed
         feed = 'tournamentcalendar'
         comps = self._access_statsperform_api(feed)
@@ -87,7 +87,7 @@ class DataLoader:
         return final_df
 
     def load_squads(self,
-                to_bq=True):
+                to_bq=False):
         squads = self._access_statsperform_api('squads')
 
         squads = pd.DataFrame(squads['squad'])
